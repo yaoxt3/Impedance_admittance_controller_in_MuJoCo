@@ -223,7 +223,7 @@ class Trajectory:
         with open('data.txt', 'w') as f:
             f.write(str(self.s))
             f.write(str(self.sd))
-        return [self.s, self.sd]
+        return [self.s, self.sd, self.sdd]
 
         
     def qplot(self, **kwargs):
