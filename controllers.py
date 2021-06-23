@@ -16,6 +16,7 @@ mj_model = mujoco_py.load_model_from_path("/home/christian/Impedance_admittance_
 mj_data = mujoco_py.MjSim(mj_model)
 t = 0
 t_a_ = []
+t_a_one = []
 t_a_admittance = []
 time = []
 time_admittance = []
@@ -23,16 +24,8 @@ i = 0
 
 class Controllers:
     
-    def __init__(self, mj_model, mj_data, qi, qf):
+    def __init__(self, mj_model, qi, qf):
         self.mj_model = mj_model
-        self.mj_data = mj_data
-        self.force_sensor = mj_data.data.sensordata[:3]
-        self.torque_sensor = mj_data.data.sensordata[3:6]
-        self.velocity_sensor = mj_data.data.sensordata[6:9]
-        self.position_sensor = mj_data.data.sensordata[9:12]
-        self.joint_acceleration = np.array([mj_data.data.qacc])
-        self.joint_velocity = np.array([mj_data.data.qvel])
-        self.joint_position = np.array([mj_data.data.qpos])
         self.qi = qi
         self.qf = qf
         
@@ -111,7 +104,7 @@ class Controllers:
         c = mj_data.data.qfrc_bias
         self.C = np.reshape(c, (7, 1))
     
-    def tau_actuator_impedance_control(self, mj_data, j):
+    def tau_impedance_control(self, mj_data, j):
         """ 
             Iq_acc + C = t_a + t_e
             q_acc = I.inv(t_a + t_e - C) (1)
@@ -127,17 +120,17 @@ class Controllers:
         k = 5
         b = 2
         Kj = np.eye(7) * k
-        Kj[0][0] = 300
-        Kj[1][1] = 300
-        Kj[2][2] = 200
-        Kj[3][3] = 150
-        Kj[4][4] = 10
+        Kj[0][0] = 1000
+        Kj[1][1] = 1000
+        Kj[2][2] = 1000
+        Kj[3][3] = 2000
+        Kj[4][4] = 250
         #Kj[5][5] = 1
         #Kj[6][6] = 10
         Bj = np.eye(7) * b
         Bj[1][1] = 10
         Bj[2][2] = 10
-        Bj[3][3] = 10
+        Bj[3][3] = 100
         Bj[4][4] = 5
         Bj[5][5] = 5
         Bj[6][6] = 5
@@ -149,9 +142,9 @@ class Controllers:
         md = np.eye(7)
         # take the torque external reading from each joint 
         # external_torque = (self.I @ md) @ torque external reading - torque external reading
-        # must add external_torque and + self.C
+        # must add external_torque
         t_a = ((self.I @ resize(self.acceleration_points[:, j], (7, 1))) -
-            (Bj @ np.array([mj_data.data.qvel]).T) - (Kj @ np.array([mj_data.data.qpos]).T)
+            (Bj @ np.array([mj_data.data.qvel]).T) - (Kj @ np.array([mj_data.data.qpos]).T) + self.C
             + (Bj @ resize(self.velocity_points[:, j], (7, 1))) +
             (Kj @ resize(self.position_points[:, j], (7, 1))))
         # print(np.array([self.position_points[:, j]]).shape)
@@ -176,6 +169,7 @@ class Controllers:
                     
         
         t_a_.append(t_a[0])
+        t_a_one.append(t_a[1])
         time.append(j)
         t_a_a = (resize(t_a, (1, 7)))[0, :6]
         mj_data.data.ctrl[:] = t_a_a
@@ -185,8 +179,10 @@ class Controllers:
         print(mj_data.data.ctrl) """
         
     def plot(self):
-        ax = plt.subplot(4, 1, 4)
+        ax = plt.subplot(5, 1, 4)
         ax.plot(time, t_a_, "-o")
+        ax = plt.subplot(5, 1, 5)
+        ax.plot(time, t_a_one, "-o")
         plt.show()
     # ADMITTANCE CONTROL
     """ 
@@ -195,15 +191,25 @@ class Controllers:
         t_ext = Md(qd_dot_dot - q0_dot_dot) + Dd(qd_dot - q0_dot) + Kd(qd - q0)
         t_ext = Md(a_dot_dot) + Dd(a_dot) + Kd(a)
         
-        - a - was passed to the functions of iteration to solve the ode
-        After this, q0 was added to each a of each joint to obtain qd
+        - a - was passed to the functions of itegration to solve the ode
+        After this, q0 was added to each - a - of each joint to obtain qd
         qd_admittance is the final result for this part where collums are
         the number of points in the trajetory of qd and rows are the DOF
     """ 
     def get_net_external_force(self, mj_data):
         self.net_external_force = np.array(mj_data.data.qfrc_inverse)
+        #print(self.net_external_force)
             
     def ode_second_order_solver_first_joint(self, Y, t):
+        """ 
+            It was necessary to implement ode second order solver for each joint, because
+            the values of Md, D, and K was set different for each one of the joints.
+            An example, here M_first_joint, D_first_joint, and K_first_joint are parameters
+            with respect to joint number one of iiwa. The value M_first_joint doesn't have
+            sense for now, but after it'll be fixed.
+            The final result of this evaluation is a vector t_stop x 2 where the first collum
+            is the qd for the joint and the second collum is the qd_dot.
+        """
         a_one_dot = Y[1]
         a_two_dot = ((self.net_external_force[0] - self.D_first_joint * Y[1] - self.K_first_joint * Y[0]) / self.M_first_joint)
         
@@ -235,7 +241,8 @@ class Controllers:
     
     def ode_second_order_solver_sixth_joint(self, Y, t):
         a_one_dot = Y[1]
-        a_two_dot = ((self.net_external_force[5] - self.D_sixth_joint * Y[1] - self.K_sixth_joint * Y[0]) / self.M_sixth_joint)
+        #self.net_external_force[5]
+        a_two_dot = ((10 - self.D_sixth_joint * Y[1] - self.K_sixth_joint * Y[0]) / self.M_sixth_joint)
         
         return [a_one_dot, a_two_dot]
     
@@ -245,56 +252,71 @@ class Controllers:
         
         return [a_one_dot, a_two_dot]
            
-    def output_admittance_control(self, t_stop):
+    def output_admittance_control(self, t_stop, q0, start=False):
         # Process to obtain qd
         t = np.arange(0, t_stop, 1)
-        asol_one =  integrate.odeint(self.ode_second_order_solver_first_joint, [0, 0], t)
-        asol_two =  integrate.odeint(self.ode_second_order_solver_second_joint, [0, 0], t)
-        asol_three =  integrate.odeint(self.ode_second_order_solver_third_joint, [0, 0], t)
-        asol_four =  integrate.odeint(self.ode_second_order_solver_fourth_joint, [0, 0], t)
-        asol_five =  integrate.odeint(self.ode_second_order_solver_fifth_joint, [0, 0], t)
-        asol_six =  integrate.odeint(self.ode_second_order_solver_sixth_joint, [0, 0], t)
-        asol_seven =  integrate.odeint(self.ode_second_order_solver_seventh_joint, [0, 0], t)
+        if start:
+            asol_one =  integrate.odeint(self.ode_second_order_solver_first_joint, [0, 0], t)
+            asol_two =  integrate.odeint(self.ode_second_order_solver_second_joint, [0, 0], t)
+            asol_three =  integrate.odeint(self.ode_second_order_solver_third_joint, [0, 0], t)
+            asol_four =  integrate.odeint(self.ode_second_order_solver_fourth_joint, [0, 0], t)
+            asol_five =  integrate.odeint(self.ode_second_order_solver_fifth_joint, [0, 0], t)
+            asol_six =  integrate.odeint(self.ode_second_order_solver_sixth_joint, [0, 0], t)
+            asol_seven =  integrate.odeint(self.ode_second_order_solver_seventh_joint, [0, 0], t)
+            
+        else:        
+            asol_one =  integrate.odeint(self.ode_second_order_solver_first_joint, [self.qd_admittance[0] - q0[0],
+                                                                                    self.qd_dot_admittance[0]], t)
+            asol_two =  integrate.odeint(self.ode_second_order_solver_second_joint, [self.qd_admittance[1] - q0[1], 
+                                                                                    self.qd_dot_admittance[1]], t)
+            asol_three =  integrate.odeint(self.ode_second_order_solver_third_joint, [self.qd_admittance[2] - q0[2], 
+                                                                                    self.qd_dot_admittance[2]], t)
+            asol_four =  integrate.odeint(self.ode_second_order_solver_fourth_joint, [self.qd_admittance[3] - q0[3], 
+                                                                                    self.qd_dot_admittance[3]], t)
+            asol_five =  integrate.odeint(self.ode_second_order_solver_fifth_joint, [self.qd_admittance[4] - q0[4], 
+                                                                                    self.qd_dot_admittance[4]], t)
+            asol_six =  integrate.odeint(self.ode_second_order_solver_sixth_joint, [self.qd_admittance[5] - q0[5], 
+                                                                                    self.qd_dot_admittance[5]], t)
+            asol_seven =  integrate.odeint(self.ode_second_order_solver_seventh_joint, [self.qd_admittance[6] - q0[6], 
+                                                                                        self.qd_dot_admittance[6]], t)
         
         # self.qd_admittance is a matrix 7 x t_stop
-        """ self.qd_admittance = [np.array(asol_one[:, 0]), np.array(asol_two[:, 0]),
-               np.array(asol_three[:, 0]), np.array(asol_four[:, 0]),
-               np.array(asol_five[:, 0]), np.array(asol_six[:, 0]),
-               asol_seven[:, 0]] """
         
-        self.qd_admittance = np.array([asol_one[:, 0], asol_two[:, 0],
-               asol_three[:, 0], asol_four[:, 0],
-               asol_five[:, 0], asol_six[:, 0],
-               asol_seven[:, 0]])
+        self.qd_admittance = np.array([asol_one[0][0], asol_two[0][0],
+               asol_three[0][0], asol_four[0][0],
+               asol_five[0][0], asol_six[0][0],
+               asol_seven[0][0]])
         
-        print(self.qd_admittance.shape)
+        self.qd_dot_admittance = np.array([asol_one[0][1], asol_two[0][1],
+               asol_three[0][1], asol_four[0][1],
+               asol_five[0][1], asol_six[0][1],
+               asol_seven[0][1]])
         
-        # sol[:] = np.add(sol, self.position_points[:, :len(t)])
+        """ print(asol_one)
+        print(self.qd_admittance) """
         
         # Adding the q0 to obtain qd properly
-        for j in range(len(t)):
-            for z in range(7):
-                self.qd_admittance[z][j] = self.qd_admittance[z][j] + self.position_points[z][j]
-                
-        self.qd_admittance[:] = resize(self.qd_admittance, (7, 10))
+        
+        self.qd_admittance[:] = [(self.qd_admittance[l] + q0[l]) for l in range(len(self.qd_admittance))]
 
         """ print(sol)
         print(np.shape(sol))
         print(np.shape(self.position_points))
         print(np.shape(resize(asol_one[:, 0], (1, len(t))))) """
         
-    def tau_admittance_control(self, mj_data, i):
+    def tau_admittance_control(self, mj_data, q0):
         k_p = 5
         k_d = 2
         
         
-        t_actuator = ((self.qd_admittance[:, i] - np.array([mj_data.data.qpos])) * k_p
+        t_actuator = ((self.qd_admittance - np.array([mj_data.data.qpos]) * k_p)
                        - np.array([mj_data.data.qvel]) * k_d)
         
         t_a_admittance.append(t_actuator[0])
-        time_admittance.append(i)
+        #time_admittance.append(i)
         t_a_admit = (resize(t_actuator, (1, 7)))[0, :6]
         mj_data.data.ctrl[:] = t_a_admit
+        #print(t_a_admit)
         
         
         
@@ -303,18 +325,20 @@ class Controllers:
         
     
 if __name__ == '__main__':
-    """ mj_simulation = mujoco_py.MjViewer(mj_data)
+    mj_simulation = mujoco_py.MjViewer(mj_data)
     
     qi = np.zeros(7)
-    qf = np.array([0, 0, 0, 0, 0, pi/18, 0])
-    x = Controllers(mj_model, mj_data, qi, qf)
-    n = 4
-    x.trajectory_generator(n)
+    qf = np.array([pi/18, 0, 0, 0, 0, 0, 0])
+    x = Controllers(mj_model, qi, qf)
+    n = 2000
+    n_s = 2000
+    t_stop = 2
+    x.trajectory_generator(n, n_s)
     # x.tau_actuator()
     j = 0
-    while t < 5000:
+    while t < 10000:
         if j < n:
-            x.tau_actuator(mj_data, j)
+            x.tau_impedance_control(mj_data, j)
         t += 1
         j += 1
         # print(mj_data.data.qpos)
@@ -322,31 +346,39 @@ if __name__ == '__main__':
         mj_simulation.render()
         
         if t > 100 and os.getenv('Testing') is not None:
-            break """
+            break
+        
+    x.plot()
     
-    qi = np.zeros(7)
+    """ qi = np.zeros(7)
     qf = np.array([0, 0, 0, 0, 0, pi/18, 0])
-    x = Controllers(mj_model, mj_data, qi, qf)
+    q0 = np.array([0, 0, 0, 0, 0, 0.1, 0])
+    x = Controllers(mj_model, qi, qf)
     n = 2000
     n_s = 2000
-    t_stop = 10
+    t_stop = 2
     x.trajectory_generator(n, n_s)
-    x.output_admittance_control(t_stop)
     x.get_net_external_force(mj_data)
+    x.output_admittance_control(t_stop, q0, True)
     i = 0
     t = 0
     mj_simulation = mujoco_py.MjViewer(mj_data)
     while t < 5000:
         if i < t_stop:
             x.get_net_external_force(mj_data)
-            x.tau_admittance_control(mj_data, i)
+            x.output_admittance_control(t_stop, q0)
+            x.tau_admittance_control(mj_data, q0)
+        x.get_net_external_force(mj_data)
+        x.output_admittance_control(t_stop, q0)
+        x.tau_admittance_control(mj_data, q0)
         i += 1
         t += 1
         # print(mj_data.data.qpos)
         mj_data.step()
         mj_simulation.render()
+        #print(x.net_external_force)
         
         if t > 100 and os.getenv('Testing') is not None:
-            break
+            break """
     
     

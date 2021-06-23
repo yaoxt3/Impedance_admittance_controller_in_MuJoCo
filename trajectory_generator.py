@@ -147,7 +147,7 @@ class Trajectory:
             textopts = {**textopts, **textargs}
 
         plt.figure()
-        self.n_plots = 4
+        self.n_plots = 5
         ax = plt.subplot(self.n_plots, 1, 1)
 
         # plot position
