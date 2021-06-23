@@ -41,7 +41,7 @@ x.trajectory_generator(n, n_s)
 j = 0
 while t < 10000:
     if j < n:
-        x.tau_actuator(mj_data, j)
+        x.tau_actuator_impedance_control(mj_data, j)
     t += 1
     j += 1
     #print(mj_data.data.qpos)
@@ -52,4 +52,4 @@ while t < 10000:
     if t > 100 and os.getenv('Testing') is not None:
         break
 
-x.plot()
+# x.plot()
